@@ -1,57 +1,70 @@
-from flask import Flask, render_template, request, jsonify
-import os, json
+import streamlit as st
+from faster_whisper import WhisperModel
+from transformers import pipeline
+from textblob import TextBlob
+from langdetect import detect
 
-from utils.transcription import transcribe_audio
-from utils.summarization import summarize_text
-from utils.intent import detect_intent
-from utils.sentiment import analyze_sentiment
-from utils.diarization import separate_speakers
+# ----------------------------
+# Load Models
+# ----------------------------
+@st.cache_resource
+def load_whisper():
+    return WhisperModel("small", device="cpu")
 
-app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+@st.cache_resource
+def load_summarizer():
+    return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
 
-@app.route('/')
-def index():
-    return render_template("index.html")
+whisper_model = load_whisper()
+summarizer = load_summarizer()
 
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    if "audio" not in request.files:
-        return jsonify({"error": "No audio file provided"}), 400
-    
-    file = request.files['audio']
-    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(file_path)
+# ----------------------------
+# Helper functions
+# ----------------------------
+def transcribe(file):
+    segments, info = whisper_model.transcribe(file)
+    text = " ".join([seg.text for seg in segments])
+    return text
 
-    # 1️⃣ Transcribe audio
-    full_text = transcribe_audio(file_path)
+def analyze_sentiment(text):
+    blob = TextBlob(text)
+    p = blob.sentiment.polarity
+    if p > 0.2: return "Positive"
+    if p < -0.2: return "Negative"
+    return "Neutral"
 
-    # 2️⃣ Speaker diarization
-    speaker_segments = separate_speakers(file_path)
+def detect_intent(text):
+    text = text.lower()
+    if any(k in text for k in ["exchange", "refund", "return"]): return "Exchange request"
+    if any(k in text for k in ["order", "delivery"]): return "Order status"
+    if any(k in text for k in ["price", "cost"]): return "Product inquiry"
+    return "General conversation"
 
-    # 3️⃣ Summarization
-    combined_summary = summarize_text(full_text)
+# ----------------------------
+# UI
+# ----------------------------
+st.title("🎙 Voice Analysis Dashboard")
 
-    # 4️⃣ Intent detection
-    intents = detect_intent(combined_summary)
+file = st.file_uploader("Upload audio file", type=["mp3", "wav", "m4a"])
 
-    # 5️⃣ Sentiment analysis
-    sentiment = analyze_sentiment(combined_summary)
+if file:
+    st.audio(file)
 
-    result = {
-        "summary": combined_summary,
-        "intent": intents,
-        "sentiment": sentiment,
-        "speakers": speaker_segments
-    }
+    st.write("Transcribing...")
+    text = transcribe(file)
 
-    # Save JSON
-    os.makedirs("data", exist_ok=True)
-    with open("data/transcription_result.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+    st.subheader("Transcription")
+    st.write(text)
 
-    return jsonify(result)
+    st.subheader("Language")
+    st.write(detect(text))
 
-if __name__ == "__main__":
-    app.run(debug=True)
+    st.subheader("Sentiment")
+    st.write(analyze_sentiment(text))
+
+    st.subheader("Intent")
+    st.write(detect_intent(text))
+
+    st.subheader("Summary")
+    summary = summarizer(text[:1024])[0]['summary_text']
+    st.write(summary)
