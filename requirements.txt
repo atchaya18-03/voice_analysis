@@ -1,0 +1,11 @@
+faster-whisper
+transformers
+torch
+torchaudio
+langdetect
+pyannote.audio
+speechbrain
+textblob
+scikit-learn
+streamlit
+pydub
